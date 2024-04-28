@@ -38,7 +38,7 @@ impl VegaStore {
 
         let market = mkt_resp.get_ref().market.as_ref().unwrap().clone();
 
-        info!("market found: {:?}", market,);
+        // info!("market found: {:?}", market,);
         let mktd_resp = clt
             .get_latest_market_data(GetLatestMarketDataRequest {
                 market_id: mkt_id.to_string(),
@@ -46,7 +46,7 @@ impl VegaStore {
             .await?;
 
         let market_data = mktd_resp.get_ref().market_data.as_ref().unwrap().clone();
-        info!("market data found: {:?}", market,);
+        // info!("market data found: {:?}", market,);
 
         let assets_resp = clt
             .list_assets(ListAssetsRequest {

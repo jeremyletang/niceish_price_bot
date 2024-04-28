@@ -115,10 +115,10 @@ async fn run_strategy(
         md_mid_price,
     );
 
-    if best_ask == 0. || best_bid == 0. {
-        info!("reference price are not up to date yet");
-        return;
-    }
+    // if best_ask == 0. || best_bid == 0. {
+    //     info!("reference price are not up to date yet");
+    //     return;
+    // }
 
     let w1_position_size = match store.lock().unwrap().get_position(&*w1.public_key()) {
         Some(p) => p.open_volume,
@@ -219,7 +219,7 @@ fn get_batch(
     }
     let (tif, typ, price) = match is_market {
         true => (TimeInForce::Ioc, Type::Market, "".to_string()),
-        false => (TimeInForce::Gfn, Type::Limit, price),
+        false => (TimeInForce::Gtc, Type::Limit, price),
     };
 
     return BatchMarketInstructions {
@@ -244,6 +244,7 @@ fn get_batch(
         }],
         stop_orders_cancellation: vec![],
         stop_orders_submission: vec![],
+	update_margin_mode: vec![],
     };
 }
 
@@ -257,6 +258,7 @@ fn get_close_batch(market_id: String) -> BatchMarketInstructions {
         submissions: vec![],
         stop_orders_cancellation: vec![],
         stop_orders_submission: vec![],
+	update_margin_mode: vec![],
     };
 }
 

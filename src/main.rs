@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("loaded wallet 1 with address {}", w1.public_key());
 
     let w2 = Transact::new(
-        Credentials::Mnemonic(&config.wallet_mnemonic_2, 1),
+        Credentials::Mnemonic(&config.wallet_mnemonic_1, 2),
         config.vega_grpc_url.clone(),
     )
     .await?;
@@ -63,11 +63,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rp = Arc::new(Mutex::new(binance_ws::RefPrice::new()));
 
-    tokio::spawn(binance_ws::start(
-        config.binance_ws_url.clone(),
-        config.binance_market.clone(),
-        rp.clone(),
-    ));
+    // tokio::spawn(binance_ws::start(
+    //     config.binance_ws_url.clone(),
+    //     config.binance_market.clone(),
+    //     rp.clone(),
+    // ));
 
     let addr = config.vega_grpc_url.clone();
     let mut tdclt = TradingDataServiceClient::connect(addr).await?;
