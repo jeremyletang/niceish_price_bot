@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time;
 use vega_crypto::Transact;
+use vega_protobufs::vega::Asset;
 use vega_protobufs::vega::{
     commands::v1::{
         input_data::Command, BatchMarketInstructions, OrderCancellation, OrderSubmission,
@@ -13,7 +14,6 @@ use vega_protobufs::vega::{
     order::{TimeInForce, Type},
     Market, Side,
 };
-use vega_protobufs::vega::{Asset, Position};
 
 use crate::{binance_ws::RefPrice, vega_store2::VegaStore};
 
@@ -80,6 +80,8 @@ async fn run_strategy(
     let mkt = store.lock().unwrap().get_market();
     let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
 
+    let tick_size = BigUint::parse_bytes(mkt.tick_size.as_bytes(), 10).unwrap();
+
     info!(
         "updating quotes for {}",
         mkt.tradable_instrument
@@ -94,8 +96,6 @@ async fn run_strategy(
     default_trade_size = ((rand::random::<u64>() % default_trade_size as u64) + 1) as i64;
     info!("selected trade size: {}", default_trade_size,);
 
-    let d = Decimals::new(&mkt, &asset);
-
     let (best_bid, best_ask) = rp.lock().unwrap().get();
     let mid_price = (best_ask + best_bid) / 2.;
     info!(
@@ -107,7 +107,7 @@ async fn run_strategy(
     // let price = BigUint::from_f64(d.to_market_price_precision(mid_price)).unwrap();
     let md_bid = BigUint::parse_bytes(md.best_bid_price.as_bytes(), 10).unwrap();
     let md_ask = BigUint::parse_bytes(md.best_offer_price.as_bytes(), 10).unwrap();
-    let md_mid_price = (md_ask.clone() + md_bid.clone()) / BigUint::from_i64(2).unwrap();
+    let mut md_mid_price = (md_ask.clone() + md_bid.clone()) / BigUint::from_i64(2).unwrap();
     info!(
         "new vega reference prices: bestBid({}), bestAsk({}), midPrice({})",
         md_bid.to_string(),
@@ -146,6 +146,13 @@ async fn run_strategy(
     //     "price in market decimal: {}",
     //     price_in_m_precision.to_string(),
     // );
+
+    if tick_size != BigUint::from_i8(1).unwrap() {
+        let diff = md_mid_price.clone() % tick_size.clone();
+        if diff != BigUint::from_i8(0).unwrap() {
+            md_mid_price = md_mid_price.clone() - tick_size.clone();
+        }
+    }
 
     let batch_w1 = Command::BatchMarketInstructions(get_batch(
         market.clone(),
@@ -244,7 +251,7 @@ fn get_batch(
         }],
         stop_orders_cancellation: vec![],
         stop_orders_submission: vec![],
-	update_margin_mode: vec![],
+        update_margin_mode: vec![],
     };
 }
 
@@ -258,7 +265,7 @@ fn get_close_batch(market_id: String) -> BatchMarketInstructions {
         submissions: vec![],
         stop_orders_cancellation: vec![],
         stop_orders_submission: vec![],
-	update_margin_mode: vec![],
+        update_margin_mode: vec![],
     };
 }
 
@@ -386,107 +393,3 @@ fn get_asset(mkt: &Market) -> String {
         Product::Perpetual(f) => f.settlement_asset,
     }
 }
-
-struct Decimals {
-    position_factor: f64,
-    price_factor: f64,
-    asset_factor: f64,
-}
-
-impl Decimals {
-    fn new(mkt: &Market, asset: &Asset) -> Decimals {
-        return Decimals {
-            position_factor: (10_f64).powf(mkt.position_decimal_places as f64),
-            price_factor: (10_f64).powf(mkt.decimal_places as f64),
-            asset_factor: (10_f64).powf(asset.details.as_ref().unwrap().decimals as f64),
-        };
-    }
-
-    fn from_asset_precision(&self, amount: f64) -> f64 {
-        return amount / self.asset_factor;
-    }
-
-    fn from_market_price_precision(&self, price: f64) -> f64 {
-        return price / self.price_factor;
-    }
-
-    fn from_market_position_precision(&self, position: f64) -> f64 {
-        return position / self.position_factor;
-    }
-
-    fn to_market_price_precision(&self, price: f64) -> f64 {
-        return price * self.price_factor;
-    }
-
-    fn to_market_position_precision(&self, position: f64) -> f64 {
-        return position * self.position_factor;
-    }
-}
-
-// async fn run_strategy(
-//     clt: &WalletClient,
-//     pubkey: String,
-//     market: String,
-//     store: Arc<Mutex<VegaStore>>,
-//     rp: Arc<Mutex<RefPrice>>,
-// ) {
-//     info!("executing trading strategy...");
-//     let mkt = store.lock().unwrap().get_market();
-//     let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
-
-//     info!(
-//         "updating quotes for {}",
-//         mkt.tradable_instrument
-//             .as_ref()
-//             .unwrap()
-//             .instrument
-//             .as_ref()
-//             .unwrap()
-//             .name
-//     );
-
-//     let d = Decimals::new(&mkt, &asset);
-
-//     let (best_bid, best_ask) = rp.lock().unwrap().get();
-//     info!(
-//         "new reference prices: bestBid({}), bestAsk({})",
-//         best_bid, best_ask
-//     );
-
-//     let (open_volume, aep) =
-//         volume_and_average_entry_price(&d, &store.lock().unwrap().get_position());
-
-//     let balance = get_pubkey_balance(store.clone(), pubkey.clone(), asset.id.clone(), &d);
-//     info!("pubkey balance: {}", balance);
-
-//     let bid_volume = balance * 0.5 - open_volume * aep;
-//     let offer_volume = balance * 0.5 + open_volume * aep;
-//     let notional_exposure = (open_volume * aep).abs();
-//     info!(
-//         "openvolume({}), entryPrice({}), notionalExposure({})",
-//         open_volume, aep, notional_exposure,
-//     );
-//     info!("bidVolume({}), offerVolume({})", bid_volume, offer_volume);
-
-//     use vega_wallet_client::commands::{BatchMarketInstructions, OrderCancellation, Side};
-
-//     let mut submissions = get_order_submission(&d, best_bid, Side::Buy, market.clone(), bid_volume);
-//     submissions.append(&mut get_order_submission(
-//         &d,
-//         best_ask,
-//         Side::Sell,
-//         market.clone(),
-//         offer_volume,
-//     ));
-//     let batch = BatchMarketInstructions {
-//         cancellations: vec![OrderCancellation {
-//             market_id: market.clone(),
-//             order_id: "".to_string(),
-//         }],
-//         amendments: vec![],
-//         submissions,
-//     };
-
-//     info!("batch submission: {:?}", batch);
-//     clt.send(batch).await.unwrap();
-// }
