@@ -150,7 +150,7 @@ async fn run_strategy(
     if tick_size != BigUint::from_i8(1).unwrap() {
         let diff = md_mid_price.clone() % tick_size.clone();
         if diff != BigUint::from_i8(0).unwrap() {
-            md_mid_price = md_mid_price.clone() - tick_size.clone();
+            md_mid_price = md_mid_price.clone() - diff.clone();
         }
     }
 
