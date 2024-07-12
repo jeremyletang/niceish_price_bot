@@ -33,9 +33,15 @@ pub async fn start(
     );
 
     info!("closing all positions");
+
+    let w1_position_size = match store.lock().unwrap().get_position(&*w1.public_key()) {
+        Some(p) => p.open_volume,
+        None => 0,
+    };
     match w1
         .send(Command::BatchMarketInstructions(get_close_batch(
             market.clone(),
+            w1_position_size,
         )))
         .await
     {
@@ -43,9 +49,14 @@ pub async fn start(
         Err(e) => info!("w1 close batch transaction error: {:?}", e),
     };
 
+    let w2_position_size = match store.lock().unwrap().get_position(&*w2.public_key()) {
+        Some(p) => p.open_volume,
+        None => 0,
+    };
     match w2
         .send(Command::BatchMarketInstructions(get_close_batch(
             market.clone(),
+            w2_position_size,
         )))
         .await
     {
@@ -255,14 +266,42 @@ fn get_batch(
     };
 }
 
-fn get_close_batch(market_id: String) -> BatchMarketInstructions {
+fn get_close_batch(market_id: String, pos: i64) -> BatchMarketInstructions {
+    // close existing position
+    let (side, size) = if pos > 0 {
+        (Side::Sell, pos)
+    } else if pos < 0 {
+        (Side::Buy, -pos)
+    } else {
+        (Side::Unspecified, 0)
+    };
+
+    let submissions = if side == Side::Unspecified {
+        vec![OrderSubmission {
+            expires_at: 0,
+            market_id: market_id.clone(),
+            pegged_order: None,
+            price: "0".to_string(),
+            size: size as u64,
+            reference: "".to_string(),
+            side: side.into(),
+            time_in_force: TimeInForce::Ioc.into(),
+            r#type: Type::Market.into(),
+            reduce_only: true,
+            post_only: false,
+            iceberg_opts: None,
+        }]
+    } else {
+        vec![]
+    };
+
     return BatchMarketInstructions {
         cancellations: vec![OrderCancellation {
             order_id: "".to_string(),
             market_id: market_id.clone(),
         }],
         amendments: vec![],
-        submissions: vec![],
+        submissions: submissions,
         stop_orders_cancellation: vec![],
         stop_orders_submission: vec![],
         update_margin_mode: vec![],
