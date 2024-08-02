@@ -35,7 +35,6 @@ pub async fn start(
     info!("closing all positions");
     time::sleep(Duration::from_secs(5)).await;
 
-    
     let w1_position_size = match store.lock().unwrap().get_position(&*w1.public_key()) {
         Some(p) => p.open_volume,
         None => 0,
@@ -66,6 +65,24 @@ pub async fn start(
         Err(e) => info!("w2 close batch transaction error: {:?}", e),
     };
 
+    let mkt = store.lock().unwrap().get_market();
+    // let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
+
+    let is_spot = match mkt
+        .clone()
+        .tradable_instrument
+        .unwrap()
+        .instrument
+        .unwrap()
+        .product
+        .unwrap()
+    {
+        Product::Spot(_s) => true,
+        _ => false,
+    };
+
+    let mut is_sell = true;
+
     let mut interval = time::interval(Duration::from_secs(submission_rate));
     loop {
         tokio::select! {
@@ -75,7 +92,8 @@ pub async fn start(
                 info!("adding extra sleep of {} seconds before starting", extra_sleep);
                 // add some extra time here jsut to look a little bit less scripted
                 time::sleep(Duration::from_secs(extra_sleep)).await;
-                run_strategy(&mut w1, &mut w2, market.clone(), store.clone(), rp.clone(), default_trade_size).await;
+                run_strategy(&mut w1, &mut w2, market.clone(), store.clone(), rp.clone(), default_trade_size, is_spot, is_sell).await;
+                is_sell = !is_sell;
             }
         }
     }
@@ -88,10 +106,12 @@ async fn run_strategy(
     store: Arc<Mutex<VegaStore>>,
     rp: Arc<Mutex<RefPrice>>,
     mut default_trade_size: i64,
+    is_spot: bool,
+    is_sell: bool,
 ) {
     info!("executing trading strategy...");
     let mkt = store.lock().unwrap().get_market();
-    let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
+    // let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
 
     let tick_size = BigUint::parse_bytes(mkt.tick_size.as_bytes(), 10).unwrap();
 
@@ -172,12 +192,16 @@ async fn run_strategy(
         md_mid_price.to_string(),
         w1_order_size,
         is_market,
+        is_sell,
+        is_spot,
     ));
     let batch_w2 = Command::BatchMarketInstructions(get_batch(
         market.clone(),
         md_mid_price.to_string(),
         w2_order_size,
         is_market,
+        !is_sell,
+        is_spot,
     ));
 
     if w1_order_size > 0 {
@@ -231,10 +255,61 @@ fn get_batch(
     price: String,
     mut size: i64,
     is_market: bool,
+    is_sell: bool,
+    is_spot: bool,
 ) -> BatchMarketInstructions {
+    if is_spot {
+        return get_spot_batch(market_id, price, size, is_market, is_sell);
+    }
+
     let mut side = Side::Buy;
     if size < 0 {
         side = Side::Sell;
+        size = -size;
+    }
+    let (tif, typ, price) = match is_market {
+        true => (TimeInForce::Ioc, Type::Market, "".to_string()),
+        false => (TimeInForce::Gtc, Type::Limit, price),
+    };
+
+    return BatchMarketInstructions {
+        cancellations: vec![OrderCancellation {
+            order_id: "".to_string(),
+            market_id: market_id.clone(),
+        }],
+        amendments: vec![],
+        submissions: vec![OrderSubmission {
+            expires_at: 0,
+            market_id: market_id.clone(),
+            pegged_order: None,
+            price: price,
+            size: size as u64,
+            reference: "".to_string(),
+            side: side.into(),
+            time_in_force: tif.into(),
+            r#type: typ.into(),
+            reduce_only: false,
+            post_only: false,
+            iceberg_opts: None,
+        }],
+        stop_orders_cancellation: vec![],
+        stop_orders_submission: vec![],
+        update_margin_mode: vec![],
+    };
+}
+
+fn get_spot_batch(
+    market_id: String,
+    price: String,
+    mut size: i64,
+    is_market: bool,
+    is_sell: bool,
+) -> BatchMarketInstructions {
+    let mut side = Side::Buy;
+    if is_sell {
+        side = Side::Sell;
+    }
+    if size < 0 {
         size = -size;
     }
     let (tif, typ, price) = match is_market {
