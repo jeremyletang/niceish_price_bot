@@ -33,7 +33,9 @@ pub async fn start(
     );
 
     info!("closing all positions");
+    time::sleep(Duration::from_secs(5)).await;
 
+    
     let w1_position_size = match store.lock().unwrap().get_position(&*w1.public_key()) {
         Some(p) => p.open_volume,
         None => 0,
@@ -276,12 +278,12 @@ fn get_close_batch(market_id: String, pos: i64) -> BatchMarketInstructions {
         (Side::Unspecified, 0)
     };
 
-    let submissions = if side == Side::Unspecified {
+    let submissions = if side != Side::Unspecified {
         vec![OrderSubmission {
             expires_at: 0,
             market_id: market_id.clone(),
             pegged_order: None,
-            price: "0".to_string(),
+            price: "".to_string(),
             size: size as u64,
             reference: "".to_string(),
             side: side.into(),
