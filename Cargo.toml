@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+alloy = { version = "0.3.3", features = ["full"] }
 clap = { version = "4.1.4", features = ["derive"] }
 futures = "0.3.26"
 futures-util = { version = "0.3.26", features = ["tokio-io", "io"] }
@@ -24,4 +25,6 @@ tungstenite = { version = "0.18.0", features = ["native-tls"] }
 url = "2.3.1"
 vega_protobufs = { git = "https://github.com/jeremyletang/vega-rust-sdk" }
 vega_crypto = { git = "https://github.com/jeremyletang/vega-rust-sdk" }
+pyth-prices = { git = "https://github.com/jeremyletang/pyth-prices" }
+hex = "0.4.3"
 #vega_wallet_client = { git = "https://github.com/jeremyletang/vega-rust-sdk" }

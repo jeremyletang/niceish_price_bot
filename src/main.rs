@@ -35,6 +35,8 @@ struct Config {
     binance_market: String,
     trade_size: i64,
     submission_rate: u64,
+    pricing_mode: strategy2::PricingMode,
+    dry_run: bool,
 }
 
 #[tokio::main]
@@ -92,6 +94,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         vstore.clone(),
         rp.clone(),
         config.submission_rate,
+        config.pricing_mode,
+        config.dry_run,
     ));
 
     // just loop forever, waiting for user interupt

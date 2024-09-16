@@ -1,11 +1,13 @@
+use alloy::primitives::{fixed_bytes, FixedBytes};
 use log::info;
 use num_bigint::BigUint;
-use num_traits::cast::FromPrimitive;
+use num_traits::cast::{FromPrimitive, ToPrimitive};
+use pyth_prices::get_price;
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time;
 use vega_crypto::Transact;
-use vega_protobufs::vega::Asset;
 use vega_protobufs::vega::{
     commands::v1::{
         input_data::Command, BatchMarketInstructions, OrderCancellation, OrderSubmission,
@@ -17,6 +19,12 @@ use vega_protobufs::vega::{
 
 use crate::{binance_ws::RefPrice, vega_store2::VegaStore};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PricingMode {
+    Pyth { id: String },
+    VegaBook,
+}
+
 pub async fn start(
     mut w1: Transact,
     mut w2: Transact,
@@ -25,6 +33,8 @@ pub async fn start(
     store: Arc<Mutex<VegaStore>>,
     rp: Arc<Mutex<RefPrice>>,
     submission_rate: u64,
+    pricing_mode: PricingMode,
+    dry_run: bool,
 ) {
     // just loop forever, waiting for user interupt
     info!(
@@ -92,7 +102,7 @@ pub async fn start(
                 info!("adding extra sleep of {} seconds before starting", extra_sleep);
                 // add some extra time here jsut to look a little bit less scripted
                 time::sleep(Duration::from_secs(extra_sleep)).await;
-                run_strategy(&mut w1, &mut w2, market.clone(), store.clone(), rp.clone(), default_trade_size, is_spot, is_sell).await;
+                run_strategy(&mut w1, &mut w2, market.clone(), store.clone(), rp.clone(), default_trade_size, is_spot, is_sell, pricing_mode.clone(), dry_run).await;
                 is_sell = !is_sell;
             }
         }
@@ -108,12 +118,15 @@ async fn run_strategy(
     mut default_trade_size: i64,
     is_spot: bool,
     is_sell: bool,
+    pricing_mode: PricingMode,
+    dry_run: bool,
 ) {
     info!("executing trading strategy...");
     let mkt = store.lock().unwrap().get_market();
     // let asset = store.lock().unwrap().get_asset(get_asset(&mkt));
 
     let tick_size = BigUint::parse_bytes(mkt.tick_size.as_bytes(), 10).unwrap();
+    let decimal_places = BigUint::from_u64(mkt.decimal_places).unwrap();
 
     info!(
         "updating quotes for {}",
@@ -136,11 +149,48 @@ async fn run_strategy(
         best_bid, best_ask, mid_price,
     );
 
-    let md = store.lock().unwrap().get_market_data();
-    // let price = BigUint::from_f64(d.to_market_price_precision(mid_price)).unwrap();
-    let md_bid = BigUint::parse_bytes(md.best_bid_price.as_bytes(), 10).unwrap();
-    let md_ask = BigUint::parse_bytes(md.best_offer_price.as_bytes(), 10).unwrap();
-    let mut md_mid_price = (md_ask.clone() + md_bid.clone()) / BigUint::from_i64(2).unwrap();
+    let (md_bid, md_ask, mut md_mid_price) = match pricing_mode {
+        PricingMode::VegaBook => {
+            let md = store.lock().unwrap().get_market_data();
+            // let price = BigUint::from_f64(d.to_market_price_precision(mid_price)).unwrap();
+            let md_bid = BigUint::parse_bytes(md.best_bid_price.as_bytes(), 10).unwrap();
+            let md_ask = BigUint::parse_bytes(md.best_offer_price.as_bytes(), 10).unwrap();
+            let mut md_mid_price =
+                (md_ask.clone() + md_bid.clone()) / BigUint::from_i64(2).unwrap();
+            (md_bid, md_ask, md_mid_price)
+        }
+        PricingMode::Pyth { id } => {
+            // pyth always have 18
+            let diff_decimal_places = BigUint::from_i64(18).unwrap() - decimal_places.clone();
+            let final_num: BigUint = BigUint::from_i64(10)
+                .unwrap()
+                .pow(diff_decimal_places.to_u32().unwrap());
+            info!(
+                "market decimal places: {}, diff decimal places: {} : {}",
+                decimal_places.clone(),
+                diff_decimal_places.clone(),
+                final_num,
+            );
+            let bytes: Vec<u8> = hex::decode(id).expect("invalid hex");
+            let id: FixedBytes<32> = FixedBytes::from_slice(&bytes).into();
+            match pyth_prices::get_price("https://rpc.gnosis.mainnet.community", id).await {
+                Ok(v) => {
+                    let p = v.to_string();
+                    let mut md_mid_price =
+                        BigUint::parse_bytes(p.as_bytes(), 10).unwrap() / final_num;
+                    (
+                        md_mid_price.clone(),
+                        md_mid_price.clone(),
+                        md_mid_price.clone(),
+                    )
+                }
+                Err(e) => {
+                    info!("couldn't get pyth price {e}");
+                    return;
+                }
+            }
+        }
+    };
     info!(
         "new vega reference prices: bestBid({}), bestAsk({}), midPrice({})",
         md_bid.to_string(),
@@ -203,6 +253,12 @@ async fn run_strategy(
         !is_sell,
         is_spot,
     ));
+
+    if dry_run {
+        info!("batch 1: {:?}", batch_w1);
+        info!("batch 2: {:?}", batch_w2);
+        return;
+    }
 
     if w1_order_size > 0 {
         match w1.send(batch_w1).await {
@@ -494,6 +550,7 @@ fn get_order_sizes(
 //     return (0., 0.);
 // }
 
+#[allow(dead_code)]
 fn get_asset(mkt: &Market) -> String {
     match mkt
         .clone()
